@@ -6,6 +6,11 @@ let heatmapInstance = null;
 let perPageHeatmaps = {}; // store heatmap instances by page
 let pdfDoc = null;
 const PAGE_RENDER_SCALE = 1.5;
+// --- Fixation detection / smoothing params ---
+const DISPERSION_THRESHOLD = 60; // pixels
+const MIN_FIXATION_DURATION = 150; // ms
+let sampleBuffer = []; // {x,y,t}
+let fixationRecords = []; // {page,x,y,start,end,duration}
 
 // Calibration Points (Percentages of screen width/height)
 const calibrationPoints = [
@@ -66,6 +71,17 @@ window.onload = async function () {
 						value: 1,
 					});
 				}
+			}
+		.setGazeListener(function (data, clock) {
+			if (data && isTracking) {
+				const t = clock || Date.now();
+				// Push sample into buffer (viewport coords)
+				sampleBuffer.push({ x: Math.floor(data.x), y: Math.floor(data.y), t });
+				// keep buffer short (last 1s)
+				const cutoff = t - 1000;
+				sampleBuffer = sampleBuffer.filter((s) => s.t >= cutoff);
+				// try to detect fixation
+				processSamples();
 			}
 		})
 		.saveDataAcrossSessions(false) // Don't save calibration to localstorage for this demo
@@ -185,6 +201,73 @@ function mapGazeToPdf(dataX, dataY) {
 	};
 }
 
+function processSamples() {
+	if (sampleBuffer.length < 3) return; // need a few samples
+	const startT = sampleBuffer[0].t;
+	const endT = sampleBuffer[sampleBuffer.length - 1].t;
+	const duration = endT - startT;
+
+	const xs = sampleBuffer.map((s) => s.x);
+	const ys = sampleBuffer.map((s) => s.y);
+	const minX = Math.min(...xs);
+	const maxX = Math.max(...xs);
+	const minY = Math.min(...ys);
+	const maxY = Math.max(...ys);
+	const dispersion = (maxX - minX) + (maxY - minY);
+
+	if (duration >= MIN_FIXATION_DURATION && dispersion <= DISPERSION_THRESHOLD) {
+		// compute centroid
+		const sumX = xs.reduce((a, b) => a + b, 0);
+		const sumY = ys.reduce((a, b) => a + b, 0);
+		const cx = Math.round(sumX / xs.length);
+		const cy = Math.round(sumY / ys.length);
+
+		// map centroid to pdf page
+		const mapped = mapGazeToPdf(cx, cy);
+		const fixation = { page: mapped ? mapped.page : null, x: mapped ? mapped.x : cx, y: mapped ? mapped.y : cy, start: startT, end: endT, duration };
+		fixationRecords.push(fixation);
+
+		// update per-page text stats if applicable
+		if (mapped) {
+			const info = perPageHeatmaps[mapped.page];
+			if (info) {
+				// ensure heatmap instance
+				if (!info.instance) {
+					const container = document.createElement('div');
+					container.style.width = info.width + 'px';
+					container.style.height = info.height + 'px';
+					container.style.position = 'absolute';
+					container.style.top = '0';
+					container.style.left = '0';
+					info.overlay.appendChild(container);
+					info.instance = h337.create({ container, radius: 30, maxOpacity: 0.6, minOpacity: 0, blur: 0.75 });
+				}
+
+				// add to heatmap (scale value by duration)
+				info.instance.addData({ x: mapped.x, y: mapped.y, value: Math.max(1, Math.round(mapped.duration ? mapped.duration / 100 : Math.max(1, Math.round(duration / 100)))) || Math.max(1, Math.round(duration / 100)) });
+
+				// map to text item
+				if (info.textItems && info.textItems.length) {
+					for (let ti of info.textItems) {
+						const r = ti.rect;
+						if (mapped.x >= r.left && mapped.x <= r.left + r.width && mapped.y >= r.top && mapped.y <= r.top + r.height) {
+							const stat = info.textCounts[ti.idx] || { count: 0, duration: 0 };
+							stat.count += 1;
+							stat.duration += duration;
+							info.textCounts[ti.idx] = stat;
+							updateTextHighlights(mapped.page);
+							break;
+						}
+					}
+				}
+			}
+		}
+
+		// clear buffer after fixation detection
+		sampleBuffer = [];
+	}
+}
+
 async function renderTextLayer(page, pageNumber, viewport, textLayer) {
 	const textContent = await page.getTextContent();
 	const items = textContent.items;
@@ -250,6 +333,37 @@ function updateTextHighlights(pageNumber) {
 		hl.style.background = `rgba(250,180,50,${0.15 + 0.6 * intensity})`;
 		info.overlay.appendChild(hl);
 	});
+}
+
+function exportCSV() {
+	if (!pdfDoc) {
+		alert('No PDF loaded');
+		return;
+	}
+	const rows = [];
+	rows.push(['page', 'text', 'fixation_count', 'total_fixation_ms']);
+	Object.keys(perPageHeatmaps).forEach((p) => {
+		const pageNum = parseInt(p, 10);
+		const info = perPageHeatmaps[pageNum];
+		if (!info) return;
+		const items = info.textItems || [];
+		items.forEach((ti) => {
+			const stat = info.textCounts[ti.idx] || { count: 0, duration: 0 };
+			// sanitize text
+			const txt = (ti.str || '').replace(/\r?\n|,|"/g, ' ').trim();
+			rows.push([pageNum, `"${txt}"`, stat.count, stat.duration]);
+		});
+	});
+
+	const csvContent = rows.map((r) => r.join(',')).join('\n');
+	const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+	const url = URL.createObjectURL(blob);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = 'eye_tracking_text_metrics.csv';
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
 }
 
 // --- Calibration Logic ---
@@ -506,12 +620,7 @@ async function exportPageHeatmap(pageNum) {
 
 	// trigger download
 	const url = exportCanvas.toDataURL('image/png');
-	const a = document.createElement('a');
-	a.href = url;
-	a.download = `page-${pageNum}-heatmap.png`;
-	document.body.appendChild(a);
-	a.click();
-	a.remove();
+	return url;
 }
 
 // Export all pages heatmaps sequentially
@@ -520,9 +629,42 @@ async function exportAllHeatmaps() {
 		alert('No PDF loaded');
 		return;
 	}
+	// create zip with jszip
+	const zip = new JSZip();
 	for (let p = 1; p <= pdfDoc.numPages; p++) {
-		await exportPageHeatmap(p);
+		const dataUrl = await exportPageHeatmap(p);
+		if (!dataUrl) continue;
+		// convert dataURL to blob
+		const resp = await fetch(dataUrl);
+		const blob = await resp.blob();
+		zip.file(`page-${p}-heatmap.png`, blob);
 	}
+	// include CSV
+	// build csv same as exportCSV but return content
+	const rows = [];
+	rows.push(['page', 'text', 'fixation_count', 'total_fixation_ms']);
+	Object.keys(perPageHeatmaps).forEach((p) => {
+		const pageNum = parseInt(p, 10);
+		const info = perPageHeatmaps[pageNum];
+		if (!info) return;
+		const items = info.textItems || [];
+		items.forEach((ti) => {
+			const stat = info.textCounts[ti.idx] || { count: 0, duration: 0 };
+			const txt = (ti.str || '').replace(/\r?\n|,|"/g, ' ').trim();
+			rows.push([pageNum, `"${txt}"`, stat.count, stat.duration]);
+		});
+	});
+	const csvContent = rows.map((r) => r.join(',')).join('\n');
+	zip.file('eye_tracking_text_metrics.csv', csvContent);
+
+	const content = await zip.generateAsync({ type: 'blob' });
+	const url = URL.createObjectURL(content);
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = 'eye-tracking-results.zip';
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
 }
 
 function resetData() {

@@ -10,6 +10,7 @@
     <script src="https://cdn.jsdelivr.net/npm/heatmapjs@2.0.2/heatmap.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
 
     <!-- Project stylesheet -->
     <link rel="stylesheet" href="css/styles.css">
@@ -32,6 +33,10 @@
             <button id="exportBtn" onclick="exportAllHeatmaps()"
                 class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded shadow transition">
                 Export Heatmaps (PNG)
+            </button>
+            <button id="exportCsvBtn" onclick="exportCSV()"
+                class="bg-gray-700 hover:bg-gray-800 text-white px-4 py-2 rounded shadow transition">
+                Export CSV
             </button>
             <button onclick="toggleHeatmap()" id="heatmapBtn"
                 class="bg-pink-600 hover:bg-pink-700 text-white px-4 py-2 rounded shadow transition hidden">
