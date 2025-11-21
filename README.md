@@ -1,11 +1,11 @@
-# My Web Project
+# Eye  Tracker 
 
 This project is an eye tracking heatmap generator that utilizes WebGazer for gaze tracking and Heatmap.js for visualizing gaze data. The application is styled using Tailwind CSS.
 
 ## Project Structure
 
 ```
-my-web-project
+
 ├── index.html        # Main HTML document
 ├── css
 │   └── styles.css    # CSS styles for the application
@@ -25,7 +25,7 @@ my-web-project
 2. **Open the Project**: 
    Navigate to the project directory:
    ```
-   cd my-web-project
+   cd Eye Tracker
    ```
 
 3. **Open index.html**: 
