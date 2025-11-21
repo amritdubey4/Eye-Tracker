@@ -3,6 +3,9 @@ const CALIBRATION_CLICKS_NEEDED = 5; // Clicks per point to calibrate
 let gazeData = []; // Store X,Y coordinates
 let isTracking = false;
 let heatmapInstance = null;
+let perPageHeatmaps = {}; // store heatmap instances by page
+let pdfDoc = null;
+const PAGE_RENDER_SCALE = 1.5;
 
 // Calibration Points (Percentages of screen width/height)
 const calibrationPoints = [
@@ -26,13 +29,24 @@ window.onload = async function () {
 		.setRegression('ridge')
 		.setGazeListener(function (data, clock) {
 			if (data && isTracking) {
-				// Store data for heatmap
-				// WebGazer gives us x,y coordinates relative to the viewport
-				gazeData.push({
-					x: Math.floor(data.x),
-					y: Math.floor(data.y),
-					value: 1, // Intensity of this point (1 = standard gaze)
-				});
+				// Map gaze to PDF page if possible
+				const mapped = mapGazeToPdf(data.x, data.y);
+				if (mapped) {
+					gazeData.push({
+						page: mapped.page,
+						x: mapped.x,
+						y: mapped.y,
+						value: 1,
+					});
+				} else {
+					// fallback: store viewport points (not used for PDF heatmaps)
+					gazeData.push({
+						page: null,
+						x: Math.floor(data.x),
+						y: Math.floor(data.y),
+						value: 1,
+					});
+				}
 			}
 		})
 		.saveDataAcrossSessions(false) // Don't save calibration to localstorage for this demo
@@ -43,7 +57,100 @@ window.onload = async function () {
 	webgazer.showPredictionPoints(true); /* Shows the red dot */
 
 	updateStatus('Camera ready. Please Start Calibration.');
+
+	// PDF.js worker setup (CDN)
+	if (window['pdfjsLib']) {
+		pdfjsLib.GlobalWorkerOptions.workerSrc =
+			'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.worker.min.js';
+		setupPdfInput();
+	} else {
+		console.warn('pdfjsLib not found; PDF upload disabled.');
+	}
 };
+// --- PDF Upload & Rendering ---
+function setupPdfInput() {
+	const input = document.getElementById('pdfInput');
+	if (!input) return;
+	input.addEventListener('change', (e) => {
+		const file = e.target.files && e.target.files[0];
+		if (file) loadPdfFile(file);
+	});
+}
+
+async function loadPdfFile(file) {
+	const url = URL.createObjectURL(file);
+	updateStatus('Loading PDF...');
+	pdfDoc = await pdfjsLib.getDocument({ url }).promise;
+	const viewer = document.getElementById('pdfViewer');
+	viewer.innerHTML = '';
+	for (let p = 1; p <= pdfDoc.numPages; p++) {
+		const page = await pdfDoc.getPage(p);
+		await renderPage(page, p, viewer);
+	}
+	updateStatus(`Loaded PDF (${pdfDoc.numPages} pages).`);
+}
+
+async function renderPage(page, pageNumber, viewer) {
+	const viewport = page.getViewport({ scale: PAGE_RENDER_SCALE });
+
+	const pageWrapper = document.createElement('div');
+	pageWrapper.className = 'pdf-page';
+	pageWrapper.style.width = `${Math.floor(viewport.width)}px`;
+	pageWrapper.dataset.pageNumber = pageNumber;
+
+	const canvas = document.createElement('canvas');
+	canvas.className = 'pdf-canvas';
+	canvas.width = Math.floor(viewport.width);
+	canvas.height = Math.floor(viewport.height);
+	const ctx = canvas.getContext('2d');
+
+	const renderContext = { canvasContext: ctx, viewport };
+	await page.render(renderContext).promise;
+
+	// overlay for heatmap and highlights
+	const overlay = document.createElement('div');
+	overlay.className = 'pdf-overlay';
+	overlay.style.width = canvas.width + 'px';
+	overlay.style.height = canvas.height + 'px';
+
+	pageWrapper.appendChild(canvas);
+	pageWrapper.appendChild(overlay);
+	viewer.appendChild(pageWrapper);
+
+	// create a heatmap container object for this page overlay (instance lazy-created)
+	perPageHeatmaps[pageNumber] = {
+		overlay,
+		instance: null,
+		width: canvas.width,
+		height: canvas.height,
+	};
+}
+
+// Map a viewport gaze coordinate to a PDF page and page-relative coordinates
+function mapGazeToPdf(dataX, dataY) {
+	const el = document.elementFromPoint(dataX, dataY);
+	if (!el) return null;
+
+	const pageEl = el.closest('.pdf-page');
+	if (!pageEl) return null;
+
+	const pageNum = parseInt(pageEl.dataset.pageNumber, 10);
+	const canvas = pageEl.querySelector('canvas.pdf-canvas');
+	const rect = canvas.getBoundingClientRect();
+
+	const x = Math.round(dataX - rect.left);
+	const y = Math.round(dataY - rect.top);
+
+	// clamp
+	const px = Math.max(0, Math.min(x, rect.width));
+	const py = Math.max(0, Math.min(y, rect.height));
+
+	return {
+		page: pageNum,
+		x: Math.floor((px / rect.width) * perPageHeatmaps[pageNum].width),
+		y: Math.floor((py / rect.height) * perPageHeatmaps[pageNum].height),
+	};
+}
 
 // --- Calibration Logic ---
 function startCalibration() {
@@ -134,6 +241,91 @@ function toggleHeatmap() {
 }
 
 function renderHeatmap() {
+	// If PDF pages exist, render per-page heatmaps
+	if (pdfDoc && Object.keys(perPageHeatmaps).length > 0) {
+		// For each page, create or update heatmap on the overlay
+		Object.keys(perPageHeatmaps).forEach((p) => {
+			const pageNum = parseInt(p, 10);
+			const info = perPageHeatmaps[pageNum];
+			if (!info) return;
+
+			// Clear previous overlay children (heatmap canvas etc.)
+			info.overlay.innerHTML = '';
+
+			const pageContainer = document.createElement('div');
+			pageContainer.style.width = info.width + 'px';
+			pageContainer.style.height = info.height + 'px';
+			pageContainer.style.position = 'absolute';
+			pageContainer.style.top = '0';
+			pageContainer.style.left = '0';
+
+			info.overlay.appendChild(pageContainer);
+
+			// Prepare data for this page
+			const pagePoints = gazeData
+				.filter((g) => g.page === pageNum)
+				.map((g) => ({ x: g.x, y: g.y, value: g.value }));
+
+			// create heatmap instance for the page
+			if (info.instance) {
+				info.instance.setData({ max: 5, data: pagePoints });
+			} else {
+				info.instance = h337.create({
+					container: pageContainer,
+					radius: 30,
+					maxOpacity: 0.6,
+					minOpacity: 0,
+					blur: 0.75,
+				});
+				info.instance.setData({ max: 5, data: pagePoints });
+			}
+
+			// Add a simple centroid highlight for densest area (basic approximation)
+			// Compute a quick grid density to find densest bin
+			if (pagePoints.length > 0) {
+				const GRID = 8;
+				const counts = {};
+				pagePoints.forEach((pt) => {
+					const gx = Math.floor((pt.x / info.width) * GRID);
+					const gy = Math.floor((pt.y / info.height) * GRID);
+					const key = gx + ',' + gy;
+					counts[key] = (counts[key] || 0) + pt.value;
+				});
+				// find max bin
+				let maxKey = null;
+				let maxVal = 0;
+				Object.keys(counts).forEach((k) => {
+					if (counts[k] > maxVal) {
+						maxVal = counts[k];
+						maxKey = k;
+					}
+				});
+				if (maxKey) {
+					const [gx, gy] = maxKey.split(',').map(Number);
+					const boxW = Math.round(info.width / GRID);
+					const boxH = Math.round(info.height / GRID);
+					const left = gx * boxW;
+					const top = gy * boxH;
+					const highlight = document.createElement('div');
+					highlight.className = 'text-highlight';
+					highlight.style.left = left + 'px';
+					highlight.style.top = top + 'px';
+					highlight.style.width = boxW + 'px';
+					highlight.style.height = boxH + 'px';
+					info.overlay.appendChild(highlight);
+				}
+			}
+		});
+
+		updateStatus(
+			`Heatmap generated for PDF (${
+				gazeData.filter((g) => g.page).length
+			} gaze points assigned to pages).`
+		);
+		return;
+	}
+
+	// Fallback: single-page/global heatmap
 	const container = document.getElementById('heatmapContainer');
 	container.innerHTML = ''; // Clear previous canvas
 
@@ -146,7 +338,6 @@ function renderHeatmap() {
 		blur: 0.75,
 	});
 
-	// Filter/Prepare data
 	// Heatmap.js expects {x, y, value}
 	const max = 5; // Maximum intensity threshold
 

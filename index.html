@@ -8,6 +8,7 @@
     <!-- External Libraries -->
     <script src="https://cdn.jsdelivr.net/npm/webgazer@3.4.0/dist/webgazer.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/heatmapjs@2.0.2/heatmap.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.14.305/pdf.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
     <!-- Project stylesheet -->
@@ -42,6 +43,15 @@
 
     <!-- Heatmap Layer -->
     <div id="heatmapContainer"></div>
+
+    <!-- PDF Upload / Viewer -->
+    <div class="fixed top-16 left-1/2 -translate-x-1/2 z-50 p-2 bg-white rounded shadow-md">
+        <label class="text-sm font-medium mr-2">Upload PDF:</label>
+        <input id="pdfInput" type="file" accept="application/pdf" class="text-sm" />
+    </div>
+
+    <!-- PDF Viewer -->
+    <div id="pdfViewer" class="pt-24 px-8 max-w-5xl mx-auto pb-20"></div>
 
     <!-- Demo Content to Look At -->
     <main class="pt-24 px-8 max-w-4xl mx-auto pb-20">
