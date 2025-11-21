@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eye Tracking Heatmap Generator</title>
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/webgazer@3.4.0/dist/webgazer.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/heatmapjs@2.0.2/heatmap.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Project stylesheet -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+
+<body class="text-gray-800">
+
+    <!-- Navigation / Controls -->
+    <nav class="fixed top-0 left-0 w-full bg-white shadow-md z-50 p-4 flex justify-between items-center">
+        <h1 class="text-xl font-bold text-indigo-700">EyeTracker Pro</h1>
+        <div class="space-x-2">
+            <button onclick="startCalibration()"
+                class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded shadow transition">
+                1. Start Calibration
+            </button>
+            <button onclick="toggleHeatmap()" id="heatmapBtn"
+                class="bg-pink-600 hover:bg-pink-700 text-white px-4 py-2 rounded shadow transition hidden">
+                2. Generate Heatmap
+            </button>
+            <button onclick="resetData()"
+                class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded shadow transition">
+                Reset
+            </button>
+        </div>
+    </nav>
+
+    <!-- Calibration Overlay (Dynamically populated) -->
+    <div id="calibrationDiv" class="hidden fixed inset-0 z-40 pointer-events-none">
+        <!-- Dots will be injected here -->
+    </div>
+
+    <!-- Heatmap Layer -->
+    <div id="heatmapContainer"></div>
+
+    <!-- Demo Content to Look At -->
+    <main class="pt-24 px-8 max-w-4xl mx-auto pb-20">
+        <div class="bg-white p-8 rounded-lg shadow-lg mb-8">
+            <h2 class="text-3xl font-bold mb-4">Eye Tracking Demo Content</h2>
+            <p class="text-lg mb-4 leading-relaxed">
+                This is a sample article to track your eye movements. Please calibrate the system first using the button
+                above.
+                Once calibrated, read this text naturally. The system will record where your eyes linger.
+            </p>
+            <img src="https://images.unsplash.com/photo-1506744038136-46273834b3fb?ixlib=rb-4.0.3&auto=format&fit=crop&w=1000&q=80"
+                alt="Landscape" class="w-full h-64 object-cover rounded-lg mb-6 shadow-sm">
+
+            <p class="text-lg mb-4 leading-relaxed">
+                <strong>How it works:</strong> WebGazer.js uses your webcam to detect your pupil position. It maps this
+                position to screen coordinates. We store these coordinates in a local array. When you click "Generate
+                Heatmap",
+                we use heatmap.js to visualize the density of these points.
+            </p>
+
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <div class="bg-blue-50 p-6 rounded border border-blue-100">
+                    <h3 class="font-bold text-blue-800 mb-2">Box A</h3>
+                    <p>Look here to see if the heatmap turns red in this specific area.</p>
+                </div>
+                <div class="bg-green-50 p-6 rounded border border-green-100">
+                    <h3 class="font-bold text-green-800 mb-2">Box B</h3>
+                    <p>Or look here. Compare the intensity of the heatmap between these two boxes.</p>
+                </div>
+            </div>
+
+            <p class="text-lg leading-relaxed">
+                Eye tracking is widely used in UX research to understand user attention.
+                Heatmaps provide an immediate visual summary of that data.
+            </p>
+        </div>
+    </main>
+
+    <!-- Status Message -->
+    <div id="statusMsg" class="fixed bottom-4 left-4 bg-black bg-opacity-75 text-white px-4 py-2 rounded z-50 text-sm">
+        Initialize camera to begin...
+    </div>
+
+    <!-- App script (separated) -->
+    <script src="js/main.js"></script>
+</body>
+
+</html>
