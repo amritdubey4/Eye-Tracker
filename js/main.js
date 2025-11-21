@@ -32,12 +32,31 @@ window.onload = async function () {
 				// Map gaze to PDF page if possible
 				const mapped = mapGazeToPdf(data.x, data.y);
 				if (mapped) {
+					// store raw gaze point for heatmap
 					gazeData.push({
 						page: mapped.page,
 						x: mapped.x,
 						y: mapped.y,
 						value: 1,
 					});
+					// if text items exist, increment the matching text span count
+					const pageInfo = perPageHeatmaps[mapped.page];
+					if (pageInfo && pageInfo.textItems && pageInfo.textItems.length) {
+						for (let ti of pageInfo.textItems) {
+							const r = ti.rect;
+							if (
+								mapped.x >= r.left &&
+								mapped.x <= r.left + r.width &&
+								mapped.y >= r.top &&
+								mapped.y <= r.top + r.height
+							) {
+								pageInfo.textCounts[ti.idx] =
+									(pageInfo.textCounts[ti.idx] || 0) + 1;
+								updateTextHighlights(mapped.page);
+								break;
+							}
+						}
+					}
 				} else {
 					// fallback: store viewport points (not used for PDF heatmaps)
 					gazeData.push({
@@ -115,6 +134,14 @@ async function renderPage(page, pageNumber, viewer) {
 
 	pageWrapper.appendChild(canvas);
 	pageWrapper.appendChild(overlay);
+
+	// add a text layer container
+	const textLayer = document.createElement('div');
+	textLayer.className = 'text-layer';
+	textLayer.style.width = canvas.width + 'px';
+	textLayer.style.height = canvas.height + 'px';
+	pageWrapper.appendChild(textLayer);
+
 	viewer.appendChild(pageWrapper);
 
 	// create a heatmap container object for this page overlay (instance lazy-created)
@@ -123,7 +150,13 @@ async function renderPage(page, pageNumber, viewer) {
 		instance: null,
 		width: canvas.width,
 		height: canvas.height,
+		textItems: [],
+		textCounts: {},
+		textLayer,
 	};
+
+	// Render text layer and compute text item bounding boxes
+	renderTextLayer(page, pageNumber, viewport, textLayer);
 }
 
 // Map a viewport gaze coordinate to a PDF page and page-relative coordinates
@@ -150,6 +183,73 @@ function mapGazeToPdf(dataX, dataY) {
 		x: Math.floor((px / rect.width) * perPageHeatmaps[pageNum].width),
 		y: Math.floor((py / rect.height) * perPageHeatmaps[pageNum].height),
 	};
+}
+
+async function renderTextLayer(page, pageNumber, viewport, textLayer) {
+	const textContent = await page.getTextContent();
+	const items = textContent.items;
+
+	perPageHeatmaps[pageNumber].textItems = [];
+
+	items.forEach((item, idx) => {
+		// item.transform: [a, b, c, d, e, f]
+		const tx = pdfjsLib.Util.transform(viewport.transform, item.transform);
+		const left = tx[4];
+		// top needs adjustment since PDF coordinates origin differs
+		const top = tx[5] - (item.height || 0);
+		const fontHeight = Math.hypot(tx[1], tx[3]);
+
+		const span = document.createElement('span');
+		span.className = 'text-span';
+		span.dataset.index = idx;
+		span.textContent = item.str;
+		span.style.left = left + 'px';
+		span.style.top = top + 'px';
+		span.style.fontSize = fontHeight + 'px';
+		span.style.lineHeight = fontHeight + 'px';
+		textLayer.appendChild(span);
+
+		const rect = {
+			left: Math.round(left),
+			top: Math.round(top),
+			width: Math.round(item.width || 10),
+			height: Math.round(fontHeight),
+		};
+		perPageHeatmaps[pageNumber].textItems.push({ rect, str: item.str, idx });
+	});
+}
+
+function updateTextHighlights(pageNumber) {
+	const info = perPageHeatmaps[pageNumber];
+	if (!info) return;
+
+	// remove existing highlight overlays
+	const existing = info.overlay.querySelectorAll('.text-highlight');
+	existing.forEach((el) => el.remove());
+
+	const counts = info.textCounts || {};
+	const entries = Object.keys(counts).map((k) => ({
+		idx: k,
+		count: counts[k],
+	}));
+	if (entries.length === 0) return;
+
+	const max = Math.max(...entries.map((e) => e.count));
+
+	entries.forEach((e) => {
+		const ti = info.textItems.find((t) => t.idx == e.idx);
+		if (!ti) return;
+		const r = ti.rect;
+		const hl = document.createElement('div');
+		hl.className = 'text-highlight';
+		const intensity = e.count / max;
+		hl.style.left = r.left + 'px';
+		hl.style.top = r.top + 'px';
+		hl.style.width = r.width + 'px';
+		hl.style.height = r.height + 'px';
+		hl.style.background = `rgba(250,180,50,${0.15 + 0.6 * intensity})`;
+		info.overlay.appendChild(hl);
+	});
 }
 
 // --- Calibration Logic ---
@@ -347,6 +447,82 @@ function renderHeatmap() {
 	});
 
 	updateStatus(`Heatmap generated from ${gazeData.length} gaze points.`);
+}
+
+// Toggle showing/hiding text highlights
+let textHighlightsEnabled = true;
+function toggleTextHighlights() {
+	textHighlightsEnabled = !textHighlightsEnabled;
+	// show/hide all text-highlight overlays
+	Object.values(perPageHeatmaps).forEach((info) => {
+		if (!info) return;
+		const overlays = info.overlay.querySelectorAll('.text-highlight');
+		overlays.forEach(
+			(el) => (el.style.display = textHighlightsEnabled ? 'block' : 'none')
+		);
+	});
+	document.getElementById('toggleTextBtn').innerText = textHighlightsEnabled
+		? 'Hide Text Highlights'
+		: 'Show Text Highlights';
+}
+
+// Export heatmap + page canvas as PNG for a single page
+async function exportPageHeatmap(pageNum) {
+	const info = perPageHeatmaps[pageNum];
+	if (!info) return;
+
+	// find the page wrapper and pdf canvas
+	const pageEl = document.querySelector(
+		`.pdf-page[data-page-number='${pageNum}']`
+	);
+	if (!pageEl) return;
+	const pdfCanvas = pageEl.querySelector('canvas.pdf-canvas');
+
+	// create export canvas
+	const exportCanvas = document.createElement('canvas');
+	exportCanvas.width = info.width;
+	exportCanvas.height = info.height;
+	const ctx = exportCanvas.getContext('2d');
+
+	// draw pdf page
+	ctx.drawImage(pdfCanvas, 0, 0);
+
+	// draw heatmap canvas (if present)
+	const hmCanvas = info.overlay.querySelector('canvas');
+	if (hmCanvas) ctx.drawImage(hmCanvas, 0, 0);
+
+	// draw highlights
+	const highlights = info.overlay.querySelectorAll('.text-highlight');
+	highlights.forEach((hl) => {
+		const left = parseFloat(hl.style.left) || 0;
+		const top = parseFloat(hl.style.top) || 0;
+		const w = parseFloat(hl.style.width) || 0;
+		const h = parseFloat(hl.style.height) || 0;
+		// get rgba from background style
+		const bg = hl.style.background || 'rgba(250,180,50,0.25)';
+		ctx.fillStyle = bg;
+		ctx.fillRect(left, top, w, h);
+	});
+
+	// trigger download
+	const url = exportCanvas.toDataURL('image/png');
+	const a = document.createElement('a');
+	a.href = url;
+	a.download = `page-${pageNum}-heatmap.png`;
+	document.body.appendChild(a);
+	a.click();
+	a.remove();
+}
+
+// Export all pages heatmaps sequentially
+async function exportAllHeatmaps() {
+	if (!pdfDoc) {
+		alert('No PDF loaded');
+		return;
+	}
+	for (let p = 1; p <= pdfDoc.numPages; p++) {
+		await exportPageHeatmap(p);
+	}
 }
 
 function resetData() {

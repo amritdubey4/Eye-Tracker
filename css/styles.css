@@ -99,3 +99,26 @@ body {
     border-radius: 4px;
     pointer-events: none;
 }
+
+/* Text layer spans (for exact mapping) */
+.text-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+.text-layer .text-span {
+    position: absolute;
+    white-space: pre;
+    transform-origin: left top;
+    pointer-events: none;
+    color: transparent;
+    /* hide original text; highlights will show */
+}
+
+.text-layer .text-span[data-has-count="true"] {
+    /* when highlighted we will place .text-highlight overlays instead */
+}
